@@ -1,12 +1,12 @@
 ---
 name: multi-agent-plan
-description: Build an implementation plan with three subagents (planner, plan-reviewer, plan-arbiter) without user intervention. Use when the user invokes /multi-agent-plan, says "multi-agent-plan", or asks for a multi-agent plan.
+description: Build an implementation plan with four subagents (prompt optimizer using gimme-prompt, planner, plan-reviewer, plan-arbiter) without user intervention. Use when the user invokes /multi-agent-plan, says "multi-agent-plan", or asks for a multi-agent plan.
 disable-model-invocation: true
 ---
 
 # multi-agent-plan
 
-Orchestrate three subagents in sequence. You are the orchestrator: you do not plan, review, or decide yourself, and you do not ask the user anything until the final step.
+Orchestrate four subagents in sequence. You are the orchestrator: you do not plan, review, or decide yourself, and you do not ask the user anything until the final step.
 
 ## Workflow
 
@@ -14,33 +14,40 @@ Orchestrate three subagents in sequence. You are the orchestrator: you do not pl
    - Take the task description from the user's message (`$ARGUMENTS`). If no task was given, ask for it and stop.
    - Pick a short kebab-case slug for the task.
    - Create the folder `<primary workspace root>/.claude/plans/<slug>/`. The primary workspace root is the repository the task mainly affects, or the current working directory when unclear.
-   - Paths used below: `plan.md`, `review.md`, `final-plan.md` inside that folder.
-   - Build a **shared context** block containing: the full task description verbatim, every working directory and additional directory of this session, the user rules (the full contents of `~/.claude/CLAUDE.md`, plus any rule the user stated in this conversation), and any file the user attached or mentioned. Subagents do not see this conversation, so they only know what you pass them.
+   - Paths used below: `optimized-prompt.md`, `plan.md`, `review.md`, `final-plan.md` inside that folder.
 
-2. **Agent A: plan**
+2. **Agent 0: optimize the prompt**
+   - Run this step only if the `gimme-prompt` skill is available (listed among the available skills, or `~/.claude/skills/gimme-prompt/SKILL.md` exists). Otherwise skip it and the `optimized-prompt.md` references below.
+   - Run a `general-purpose` subagent (foreground) with: the task description verbatim, the absolute path of `optimized-prompt.md`, and this instruction: "Invoke the `gimme-prompt` skill with the task description as input. You cannot ask the user questions: where the skill says to ask questions, state your assumptions instead. Write to the output path the optimized prompt plus a short list of assumptions, suggested improvements, and detected risks. Do not modify source code."
+   - Check that `optimized-prompt.md` exists and is not empty. If it is missing, rerun once, then continue with the original task description only and tell the user in the final step.
+
+3. **Build the shared context**
+   - Build a **shared context** block containing: the original task description verbatim, the contents of `optimized-prompt.md` when it exists (the optimized prompt is the working brief; the original stays as the source of truth if they conflict), every working directory and additional directory of this session, the user rules (the full contents of `~/.claude/CLAUDE.md`, plus any rule the user stated in this conversation), and any file the user attached or mentioned. Subagents do not see this conversation, so they only know what you pass them.
+
+4. **Agent A: plan**
    - Run the `planner` subagent (foreground) with the shared context and the absolute path of `plan.md`.
    - Check that `plan.md` exists and is not empty. If it is missing, rerun the planner once, then stop and report the failure.
 
-3. **Agent B: review**
+5. **Agent B: review**
    - Run the `plan-reviewer` subagent (foreground) with the shared context, the absolute path of `plan.md`, and the absolute path of `review.md`.
    - Check that `review.md` exists. If it is missing, rerun the reviewer once, then stop and report the failure.
 
-4. **Agent C: decide**
+6. **Agent C: decide**
    - Run the `plan-arbiter` subagent (foreground) with the shared context and the absolute paths of `plan.md`, `review.md`, and `final-plan.md`.
    - Check that `final-plan.md` exists. If it is missing, rerun the arbiter once, then stop and report the failure.
 
-5. **Present**
+7. **Present**
    - Read `final-plan.md` and show the user: a short summary of the plan, the Decisions table, and the open questions.
-   - Link the three files so the user can inspect the intermediate steps.
+   - Link the four files so the user can inspect the intermediate steps.
    - Do not implement the plan. Wait for the user.
 
 ## Launching a subagent
 
-- Launch each subagent with the Agent tool, using its `subagent_type` (`planner`, `plan-reviewer`, `plan-arbiter`). The model comes from the frontmatter in `~/.claude/agents/<name>.md`.
+- Launch each subagent with the Agent tool, using its `subagent_type` (`general-purpose` for the prompt optimizer, then `planner`, `plan-reviewer`, `plan-arbiter`). The model comes from the frontmatter in `~/.claude/agents/<name>.md`.
 - If that `subagent_type` is not available, launch a `general-purpose` subagent and put the body of `~/.claude/agents/<name>.md` at the top of the prompt, followed by the step inputs.
 
 ## Constraints
 
 - Run the subagents one at a time. Each step needs the previous file.
-- Do not edit `plan.md`, `review.md`, or `final-plan.md` yourself.
+- Do not edit `optimized-prompt.md`, `plan.md`, `review.md`, or `final-plan.md` yourself.
 - Do not modify source code during this workflow.
